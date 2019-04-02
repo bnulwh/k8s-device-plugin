@@ -116,6 +116,8 @@ func (m *NvidiaDevicePlugin) Start() error {
 
 	go m.healthcheck()
 
+	lastAllocateTime = time.Now()
+
 	return nil
 }
 

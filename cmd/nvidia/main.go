@@ -1,5 +1,3 @@
-// Copyright (c) 2017, NVIDIA CORPORATION. All rights reserved.
-
 package main
 
 import (
@@ -60,7 +58,7 @@ func main() {
 	log.Info("Start gpushare device plugin")
 	log.Info("mps: %v", mps)
 	log.Info("healthCheck: %v", healthCheck)
-	log.Info("memoryUnit: %v", memoryUnit)
+	log.Info("memoryUnit: %s", memoryUnit)
 	ngm := nvidia.NewSharedGPUManager(*mps, *healthCheck, translateMemoryUnits(*memoryUnit))
 	err := ngm.Run()
 	if err != nil {

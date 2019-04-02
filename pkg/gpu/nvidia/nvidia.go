@@ -1,16 +1,33 @@
-// Copyright (c) 2017, NVIDIA CORPORATION. All rights reserved.
-
 package nvidia
 
 import (
+	"bytes"
 	"fmt"
+	"github.com/NVIDIA/gpu-monitoring-tools/bindings/go/nvml"
 	log "github.com/astaxie/beego/logs"
 	"strings"
-
-	"github.com/NVIDIA/gpu-monitoring-tools/bindings/go/nvml"
+	"text/template"
 
 	"golang.org/x/net/context"
 	pluginapi "k8s.io/kubernetes/pkg/kubelet/apis/deviceplugin/v1alpha"
+)
+
+const (
+	DEVICEINFO = `UUID           : {{.UUID}}
+Model          : {{or .Model "N/A"}}
+Path           : {{.Path}}
+Power          : {{if .Power}}{{.Power}} W{{else}}N/A{{end}}
+Memory	       : {{if .Memory}}{{.Memory}} MiB{{else}}N/A{{end}}
+CPU Affinity   : {{if .CPUAffinity}}NUMA node{{.CPUAffinity}}{{else}}N/A{{end}}
+Bus ID         : {{.PCI.BusID}}
+BAR1           : {{if .PCI.BAR1}}{{.PCI.BAR1}} MiB{{else}}N/A{{end}}
+Bandwidth      : {{if .PCI.Bandwidth}}{{.PCI.Bandwidth}} MB/s{{else}}N/A{{end}}
+Cores          : {{if .Clocks.Cores}}{{.Clocks.Cores}} MHz{{else}}N/A{{end}}
+Memory         : {{if .Clocks.Memory}}{{.Clocks.Memory}} MHz{{else}}N/A{{end}}
+P2P Available  : {{if not .Topology}}None{{else}}{{range .Topology}}
+    	       	 {{.BusID}} - {{(.Link.String)}}{{end}}{{end}}
+---------------------------------------------------------------------
+`
 )
 
 var (
@@ -53,14 +70,17 @@ func getDeviceCount() uint {
 
 func displayDevice(d *nvml.Device) {
 	log.Info("======= device : =============")
-	log.Info("Path: %v", d.Path)
-	log.Info("UUID: %v", d.UUID)
-	log.Info("CPUAffinity: %v", d.CPUAffinity)
-	log.Info("Memory: %v", d.Memory)
-	log.Info("Power: %v", d.Power)
-	log.Info("Model: %v", d.Model)
-	log.Info("Clocks: %v MHz", d.Clocks)
-	log.Info("PCI:", d.PCI)
+	log.Info("Path: %s", d.Path)
+	log.Info("UUID: %s", d.UUID)
+	log.Info("CPUAffinity: %d", uint(*d.CPUAffinity))
+	log.Info("Memory: %d MB", uint(*d.Memory))
+	log.Info("Power: %d W", uint(*d.Power))
+	log.Info("Model: %v", *d.Model)
+	log.Info("Cores Clock: %v MHz", uint(*d.Clocks.Cores))
+	log.Info("Memory Clock: %v MHz", uint(*d.Clocks.Memory))
+	log.Info("PCI BusID: %s", d.PCI.BusID)
+	log.Info("PCI BAR1: %d MiB", *d.PCI.BAR1)
+	log.Info("PCI Bandwidth: %d MB/s", *d.PCI.Bandwidth)
 }
 func displayDeviceStatus(device *nvml.Device) {
 	st, err := device.Status()
@@ -69,7 +89,8 @@ func displayDeviceStatus(device *nvml.Device) {
 	}
 	log.Info("-------------------------------------")
 	log.Info("path  Power Temp GPU%  Mem%  Enc   Dec   MemC  Cores")
-	log.Info("%5d %5d %5d %5d %5d %5d %5d %5d %5d",
+	log.Info("#      W     C     %      %    %     %     MHz   MHz")
+	log.Info("%s %5d %5d %5d %5d %5d %5d %5d %5d",
 		device.Path, *st.Power, *st.Temperature, *st.Utilization.GPU, *st.Utilization.Memory,
 		*st.Utilization.Encoder, *st.Utilization.Decoder, *st.Clocks.Memory, *st.Clocks.Cores)
 	log.Info("-------------------------------------")
@@ -77,24 +98,45 @@ func displayDeviceStatus(device *nvml.Device) {
 func displayProcessInfo(d *nvml.Device) {
 	pInfo, err := d.GetAllRunningProcesses()
 	if err != nil {
-		log.Warning("Error getting device %s processes: %v\n", d.Path, err)
+		log.Warning("Error getting device %s processes: %v", d.Path, err)
 	}
-	log.Info("----------------------------")
+	log.Info("-------------------------------------")
 	log.Info("Path  PID   Type  Mem   Name")
+	log.Info("Idx    #     C/G   Mib  name")
 	if len(pInfo) == 0 {
-		log.Info("%5v %5s %5s %5s %-5s\n", d.Path, "-", "-", "-", "-")
+		log.Info("%s %5s %5s %5s %-5s", d.Path, "-", "-", "-", "-")
 	}
 	for j := range pInfo {
-		log.Info("%5v %5v %5v %5v %-5v\n",
+		log.Info("%s %5v %5v %5v %-5s",
 			d.Path, pInfo[j].PID, pInfo[j].Type, pInfo[j].MemoryUsed, pInfo[j].Name)
 	}
-	log.Info("----------------------------")
+	log.Info("-------------------------------------")
+}
+
+func displayDriverVersion() {
+	driverVersion, err := nvml.GetDriverVersion()
+	if err != nil {
+		log.Critical("Error getting driver version:", err)
+	}
+
+	log.Info("Driver Version : %5v\n", driverVersion)
+}
+
+func getDeviceInfo(device nvml.Device) (str string, err error) {
+	t := template.Must(template.New("Device").Parse(DEVICEINFO))
+	buffer := bytes.NewBufferString("")
+	err = t.Execute(buffer, device)
+	if err != nil {
+		log.Critical("Template error:", err)
+		return str, err
+	}
+	return string(buffer.Bytes()), nil
 }
 
 func getDevices() ([]*pluginapi.Device, map[string]uint) {
 	n, err := nvml.GetDeviceCount()
 	check(err)
-
+	displayDriverVersion()
 	var devs []*pluginapi.Device
 	realDevNames := map[string]uint{}
 	for i := uint(0); i < n; i++ {
@@ -157,7 +199,7 @@ func watchXIDs(ctx context.Context, devs []*pluginapi.Device, xids chan<- *plugi
 		}
 
 		if err != nil {
-			log.Critical("Fatal:", err)
+			log.Critical("Fatal error: %s", err)
 		}
 		log.Info("register event for device %s ok", d.ID)
 	}
