@@ -10,7 +10,7 @@ RUN yum install -y \
     rm -rf /var/cache/yum/*
 
 ENV GOLANG_VERSION 1.10
-RUN wget -nv -O - https://storage.googleapis.com/golang/go${GOLANG_VERSION}.linux-amd64.tar.gz \
+RUN wget -nv -O - http://192.168.25.98:8080/files/go${GOLANG_VERSION}.linux-amd64.tar.gz \
     | tar -C /usr/local -xz
 ENV GOPATH /go
 ENV PATH $GOPATH/bin:/usr/local/go/bin:$PATH
@@ -19,11 +19,13 @@ ENV CGO_CFLAGS "-I /usr/local/cuda-8.0/include"
 ENV CGO_LDFLAGS "-L /usr/local/cuda-8.0/lib64"
 ENV PATH=$PATH:/usr/local/nvidia/bin:/usr/local/cuda/bin
 
-WORKDIR /go/src/nvidia-device-plugin
+WORKDIR /go/src/github.com/bnulwh/k8s-device-plugin
 COPY . .
 
-RUN export CGO_LDFLAGS_ALLOW='-Wl,--unresolved-symbols=ignore-in-object-files' && \
-    go install -ldflags="-s -w" -v nvidia-device-plugin
+RUN set -ex && \
+    export CGO_LDFLAGS_ALLOW='-Wl,--unresolved-symbols=ignore-in-object-files' && \
+    go build -ldflags="-s -w" -o /go/bin/gpushare-device-plugin-v2 cmd/nvidia/*.go && \
+    chmod +x /go/bin/gpushare-device-plugin-v2
 
 
 FROM centos:7
@@ -31,6 +33,6 @@ FROM centos:7
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=utility
 
-COPY --from=build /go/bin/nvidia-device-plugin /usr/bin/nvidia-device-plugin
+COPY --from=build /go/bin/gpushare-device-plugin-v2 /usr/bin/gpushare-device-plugin-v2
 
-CMD ["nvidia-device-plugin"]
+CMD ["gpushare-device-plugin-v2","-logtostderr"]
